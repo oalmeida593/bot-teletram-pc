@@ -104,15 +104,14 @@ async def get_financial_data() -> str:
 
 async def send_startup_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message when the command /start is issued."""
-    user = update.effective_user
     welcome_message = (
-        rf"Olá, {user.mention_html()}! Bem-vindo ao seu bot pessoal.\n"
-        "Aqui estão os comandos disponíveis:\n"
-        "/start - Inicia o bot\n"
+        "Olá! Bem-vindo ao bot de utilidades.\n\n"
+        "Comandos disponíveis:\n"
         "/help - Mostra esta mensagem de ajuda\n"
         "/screenshot - Captura a tela e envia para você\n"
         "/shutdown - Desliga o PC\n"
-        "/weather - Mostra o clima de uma cidade"
+        "/weather [cidade] - Mostra o clima\n"
+        "/dolar - Mostra a cotação do dólar"
     )
     await update.message.reply_html(welcome_message, reply_markup=ForceReply(selective=True))
 
@@ -155,7 +154,8 @@ async def send_welcome_message(application: Application) -> None:
         "/help - Mostra esta mensagem de ajuda\n"
         "/screenshot - Captura a tela e envia para você\n"
         "/shutdown - Desliga o PC\n"
-        "/weather [são paulo]"
+        "/weather [são paulo] - Mostra o clima\n"
+        "/dolar - Mostra a cotação do dólar"
     )
     try:
         await application.bot.send_message(chat_id=chat_id, text=welcome_message)
@@ -178,13 +178,13 @@ async def on_start(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.info("Startup screenshot taken and sent to Telegram.")
         
         # Send financial data
-        financial_data = await get_financial_data()  # Use await aqui
+        financial_data = await get_financial_data()
         await context.bot.send_message(chat_id=chat_id, text=financial_data)
         logger.info("Financial data sent to Telegram.")
         
         # Fetch and send weather for São Paulo
         weather_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
-        if weather_api_key and weather_api_key != "0368db67fed70ece05eed66bb711f77d":
+        if weather_api_key:
             try:
                 url = f"http://api.openweathermap.org/data/2.5/weather?q=Sao%20Paulo,BR&appid={weather_api_key}&units=metric"
                 response = requests.get(url, timeout=10)
@@ -232,6 +232,10 @@ async def on_start(context: ContextTypes.DEFAULT_TYPE) -> None:
             except Exception as weather_error:
                 logger.error(f"Error fetching weather for São Paulo: {weather_error}")
                 await context.bot.send_message(chat_id=chat_id, text="❌ Could not fetch weather information for São Paulo.")
+        else:
+            # Log that weather API key is not valid
+            logger.warning("Weather API key is not set or is a placeholder.")
+            await context.bot.send_message(chat_id=chat_id, text="❌ Weather API key is not configured.")
         
     except Exception as e:
         logger.error(f"Error in on_start: {e}")
@@ -244,62 +248,43 @@ async def send_financial_data(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch and send current weather information."""
-    # Get API key from environment variables
+    # Check if a city name is provided
+    if not context.args:
+        await update.message.reply_text("Por favor, forneça o nome de uma cidade. Exemplo: /weather São Paulo")
+        return
+
+    # Get the API key from environment variables
     weather_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
     
     # Check if API key is set
-    if not weather_api_key or weather_api_key == "0368db67fed70ece05eed66bb711f77d":
+    if not weather_api_key:
         await update.message.reply_text(
             "❌ OpenWeatherMap API key is not fully configured. Please verify the key."
         )
         return
-    
-    # Extract city from message or arguments
-    city = None
-    
-    # Check if there are command arguments
-    if context.args:
-        city = " ".join(context.args)
-    
-    # If no arguments, check the message text
-    if not city:
-        message_text = update.message.text.strip()
-        # Remove '/weather' and any separators
-        city = message_text.replace('/weather', '').replace('-', '').strip()
-    
-    # Validate and clean city input
-    if not city:
-        await update.message.reply_text(
-            "🌍 Please provide a city name. Usage: /weather [City Name]"
-        )
-        return
 
-    # Clean up common typos and formatting issues
-    def clean_city_name(name):
-        # Common replacements
-        name = name.replace('soa', 'sao')  # Fix 'soa paulo' typo
-        name = name.replace('são', 'sao')  # Normalize São
-        name = name.replace('saõ', 'sao')  # Another common typo
-        
-        # Capitalize first letters
-        return ' '.join(word.capitalize() for word in name.split())
-
-    city = clean_city_name(city)
+    # Clean and join the city name
+    city_name = ' '.join(context.args)
 
     try:
-        # Make API call to OpenWeatherMap
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={city},BR&appid={weather_api_key}&units=metric"
-        logger.info(f"Fetching weather for {city}")
+        # Construct the API URL
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city_name}&appid={weather_api_key}&units=metric"
+        
+        # Send the request
         response = requests.get(url, timeout=10)
-        response.raise_for_status()  # Raise an exception for bad status codes
+        response.raise_for_status()  # Raise an exception for bad responses
+        
+        # Parse the JSON response
         data = response.json()
 
-        # Extract relevant weather information
+        # Extract weather information
         temp = data['main']['temp']
         feels_like = data['main']['feels_like']
         humidity = data['main']['humidity']
         description = data['weather'][0]['description']
         wind_speed = data['wind']['speed']
+        city = data['name']
+        country = data['sys']['country']
 
         # Emoji selection based on weather description
         def get_weather_emoji(description):
@@ -319,9 +304,9 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         weather_emoji = get_weather_emoji(description)
 
-        # Format weather message
+        # Format the weather message
         weather_message = (
-            f"{weather_emoji} Weather in {city}:\n"
+            f"{weather_emoji} Weather in {city}, {country}:\n"
             f"🌡️ Temperature: {temp:.1f}°C\n"
             f"🌡️ Feels like: {feels_like:.1f}°C\n"
             f"💧 Humidity: {humidity}%\n"
@@ -329,20 +314,19 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             f"💨 Wind Speed: {wind_speed} m/s"
         )
 
+        # Send the weather message
         await update.message.reply_text(weather_message)
-        logger.info(f"Successfully retrieved weather for {city}")
 
-    except requests.exceptions.Timeout:
-        logger.error("Weather API request timed out")
-        await update.message.reply_text("⏰ Request timed out. Please try again later.")
     except requests.exceptions.RequestException as e:
-        logger.error(f"Weather API request error: {e}")
-        await update.message.reply_text("🚫 Unable to fetch weather information. Please try again later.")
+        logger.error(f"Network error fetching weather: {e}")
+        await update.message.reply_text("❌ Network error. Unable to fetch weather information.")
     except KeyError as e:
-        logger.error(f"Unexpected response format from OpenWeatherMap: {e}")
-        await update.message.reply_text("🤖 Unexpected error processing weather data.")
+        logger.error(f"Error parsing weather data: {e}")
+        await update.message.reply_text("❌ Unable to parse weather information.")
+    except Exception as e:
+        logger.error(f"Unexpected error fetching weather: {e}")
+        await update.message.reply_text("❌ Unexpected error processing weather data.")
 
-# Function to get USD to BRL exchange rate
 async def dollar_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Fetch current USD to BRL exchange rate."""
     try:
