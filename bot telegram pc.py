@@ -5,10 +5,13 @@ import subprocess
 import yfinance as yf
 from pycoingecko import CoinGeckoAPI
 from dotenv import load_dotenv
-from telegram import ForceReply, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes, ChatMemberHandler
+)
 import time
 import requests
+from datetime import datetime
 
 # Load environment variables from .env file
 load_dotenv()
@@ -27,7 +30,7 @@ cg = CoinGeckoAPI()
 # Function to get gold price using Yahoo Finance
 async def get_gold_price():
     try:
-        gold_data = yf.Ticker("GLD")  # ETF que segue o preço do ouro
+        gold_data = yf.Ticker("GC=F")  # COMEX Gold futures
         gold_history = gold_data.history(period="1d")
         if gold_history.empty:
             logger.error("No data found for gold.")
@@ -41,7 +44,7 @@ async def get_gold_price():
 # Function to get Brent Crude Oil price using Yahoo Finance
 async def get_oil_price():
     try:
-        oil_data = yf.Ticker("CL=F")  # Petróleo Bruto (WTI)
+        oil_data = yf.Ticker("BZ=F")  # Brent Crude Oil
         oil_history = oil_data.history(period="1d")
         if oil_history.empty:
             logger.error("No data found for Brent Crude Oil.")
@@ -102,67 +105,39 @@ async def get_financial_data() -> str:
         logger.error(f"Error in get_financial_data: {e}")
         return "Unable to fetch financial data."
 
-async def send_startup_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /start is issued."""
-    welcome_message = (
-        "Olá! Bem-vindo ao bot de utilidades.\n\n"
-        "Comandos disponíveis:\n"
-        "/help - Mostra esta mensagem de ajuda\n"
-        "/screenshot - Captura a tela e envia para você\n"
-        "/shutdown - Desliga o PC\n"
-        "/weather [cidade] - Mostra o clima\n"
-        "/dolar - Mostra a cotação do dólar"
-    )
-    await update.message.reply_html(welcome_message, reply_markup=ForceReply(selective=True))
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send a message when the command /help is issued."""
-    help_text = (
-        "🤖 Available Commands:\n\n"
-        "/start - Start the bot and get a welcome message\n"
-        "/help - Show this help message\n"
-        "/screenshot - Take a screenshot of the computer screen\n"
-        "/shutdown - Shut down the computer\n"
-        "/weather [city] - Get current weather for a specific city\n"
-        "/dolar - Get current USD to Brazilian Real (BRL) exchange rate\n\n"
-        "💡 Need more help? Contact the bot administrator."
-    )
-    await update.message.reply_text(help_text)
-
-async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Capture the screen and send it to the user."""
-    screenshot = pyautogui.screenshot()
-    screenshot_path = "screenshot.png"
-    screenshot.save(screenshot_path)
-
-    with open(screenshot_path, 'rb') as file:
-        await update.message.reply_photo(photo=file)
-
-    logger.info("Screenshot taken and sent to Telegram.")
-
-async def shutdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Shut down the PC."""
-    await update.message.reply_text("Desligando o PC...")
-    subprocess.run(["shutdown", "-s", "-t", "0"])
-
-async def send_welcome_message(application: Application) -> None:
-    """Send a welcome message to all chat members when the bot starts."""
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    welcome_message = (
-        "Olá! Estou ativo agora. Aqui estão os comandos disponíveis:\n"
-        "/start - Inicia o bot\n"
-        "/help - Mostra esta mensagem de ajuda\n"
-        "/screenshot - Captura a tela e envia para você\n"
-        "/shutdown - Desliga o PC\n"
-        "/weather [são paulo] - Mostra o clima\n"
-        "/dolar - Mostra a cotação do dólar"
-    )
+# Send welcome message to the user who sent /start
+async def send_welcome_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send welcome message when the /start command is issued."""
     try:
-        await application.bot.send_message(chat_id=chat_id, text=welcome_message)
-    except Exception as e:
-        logger.error(f"Error sending welcome message: {e}")
+        # Mensagem de boas-vindas
+        welcome_message = (
+            "Olá! Bem-vindo ao chat.\n\n"
+            "Aqui estão alguns comandos que você pode usar:\n"
+            "📸 /screenshot - Captura a tela e envia para você\n"
+            "🖥️ /shutdown - Desliga o PC\n"
+            "🌦️ /weather [cidade] - Mostra o clima\n"
+            "💱 /dolar - Mostra a cotação do dólar"
+            f"Iniciado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
 
-async def on_start(context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Enviar mensagem de boas-vindas
+        await context.bot.send_message(chat_id=update.effective_chat.id, text=welcome_message)
+        logger.info("Boas-vindas enviadas ao chat.")
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem de boas-vindas: {e}")
+
+# Handle new chat members
+async def new_member_welcome(chat_member_update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send welcome message when a new user joins the chat."""
+    try:
+        new_member = chat_member_update.chat_member.new_chat_member
+        welcome_message = f"Olá, {new_member.user.first_name}! Seja bem-vindo ao nosso chat."
+        await context.bot.send_message(chat_id=chat_member_update.chat_member.chat.id, text=welcome_message)
+    except Exception as e:
+        logger.error(f"Erro ao enviar mensagem de boas-vindas a novo membro: {e}")
+
+# Perform startup tasks when the bot starts
+async def startup_tasks(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Perform startup tasks when the bot starts."""
     try:
         # Take and send startup screenshot
@@ -181,6 +156,18 @@ async def on_start(context: ContextTypes.DEFAULT_TYPE) -> None:
         financial_data = await get_financial_data()
         await context.bot.send_message(chat_id=chat_id, text=financial_data)
         logger.info("Financial data sent to Telegram.")
+        
+        # Send welcome message for startup tasks
+        welcome_message = (
+            "Olá! Bem-vindo ao chat.\n\n"
+            "Aqui estão alguns comandos que você pode usar:\n"
+            "📸 /screenshot - Captura a tela e envia para você\n"
+            "🖥️ /shutdown - Desliga o PC\n"
+            
+            f"Iniciado em: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        await context.bot.send_message(chat_id=chat_id, text=welcome_message)
+        logger.info("Welcome message sent for startup tasks.")
         
         # Fetch and send weather for São Paulo
         weather_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
@@ -233,58 +220,94 @@ async def on_start(context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.error(f"Error fetching weather for São Paulo: {weather_error}")
                 await context.bot.send_message(chat_id=chat_id, text="❌ Could not fetch weather information for São Paulo.")
         else:
-            # Log that weather API key is not valid
+            # Log that weather API key is not set
             logger.warning("Weather API key is not set or is a placeholder.")
             await context.bot.send_message(chat_id=chat_id, text="❌ Weather API key is not configured.")
         
     except Exception as e:
-        logger.error(f"Error in on_start: {e}")
+        logger.error(f"Error in startup_tasks: {e}")
 
-async def send_financial_data(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send financial data to the chat."""
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    financial_data = await get_financial_data()
-    await context.bot.send_message(chat_id=chat_id, text=financial_data)
+async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Take and send a screenshot via Telegram."""
+    try:
+        # Take screenshot
+        screenshot_path = os.path.join(os.getenv("TEMP", "/tmp"), "telegram_screenshot.png")
+        screenshot = pyautogui.screenshot()
+        screenshot.save(screenshot_path)
+        
+        # Send screenshot
+        with open(screenshot_path, 'rb') as screenshot_file:
+            await update.message.reply_photo(photo=screenshot_file, caption="Screenshot capturado!")
+        
+        logger.info("Screenshot command executed successfully.")
+    except Exception as e:
+        await update.message.reply_text(f"Erro ao capturar screenshot: {e}")
+        logger.error(f"Screenshot command error: {e}")
+
+async def shutdown_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Shutdown the computer."""
+    try:
+        await update.message.reply_text("Desligando o computador em 10 segundos...")
+        subprocess.run(["shutdown", "/s", "/t", "10"], shell=True)
+        logger.info("Shutdown command initiated.")
+    except Exception as e:
+        await update.message.reply_text(f"Erro ao desligar: {e}")
+        logger.error(f"Shutdown command error: {e}")
+
+async def dolar_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch and send current dollar exchange rate."""
+    try:
+        # Use yfinance to get USD/BRL exchange rate
+        usd_brl = yf.Ticker("USDBRL=X")
+        
+        # Add more robust error checking
+        if not hasattr(usd_brl, 'info'):
+            raise ValueError("Unable to retrieve ticker information")
+        
+        # Try multiple ways to get the price
+        current_price = (
+            usd_brl.info.get('regularMarketPrice') or 
+            usd_brl.info.get('currentPrice') or 
+            usd_brl.info.get('price')
+        )
+        
+        if current_price is None:
+            raise ValueError("No price information available")
+        
+        message = f"💱 Cotação atual do Dólar:\n1 USD = R$ {float(current_price):.2f}"
+        await update.message.reply_text(message)
+        logger.info("Dollar exchange rate fetched successfully.")
+    except Exception as e:
+        await update.message.reply_text("Não foi possível obter a cotação do dólar.")
+        logger.error(f"Dolar command error: {e}")
+        # Optional: Add a fallback method or alternative data source here
 
 async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fetch and send current weather information."""
-    # Check if a city name is provided
-    if not context.args:
-        await update.message.reply_text("Por favor, forneça o nome de uma cidade. Exemplo: /weather São Paulo")
-        return
-
-    # Get the API key from environment variables
-    weather_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
-    
-    # Check if API key is set
-    if not weather_api_key:
-        await update.message.reply_text(
-            "❌ OpenWeatherMap API key is not fully configured. Please verify the key."
-        )
-        return
-
-    # Clean and join the city name
-    city_name = ' '.join(context.args)
-
+    """Fetch and send weather for a specified city."""
     try:
-        # Construct the API URL
-        url = f"http://api.openweathermap.org/data/2.5/weather?q={city_name}&appid={weather_api_key}&units=metric"
+        # Check if city is provided
+        if not context.args:
+            await update.message.reply_text("Por favor, especifique uma cidade. Exemplo: /weather São Paulo")
+            return
         
-        # Send the request
+        city = " ".join(context.args)
+        weather_api_key = os.getenv("OPENWEATHERMAP_API_KEY")
+        
+        if not weather_api_key:
+            await update.message.reply_text("Chave de API de clima não configurada.")
+            return
+        
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={city}&appid={weather_api_key}&units=metric"
         response = requests.get(url, timeout=10)
-        response.raise_for_status()  # Raise an exception for bad responses
-        
-        # Parse the JSON response
+        response.raise_for_status()
         data = response.json()
 
-        # Extract weather information
+        # Extract relevant weather information
         temp = data['main']['temp']
         feels_like = data['main']['feels_like']
         humidity = data['main']['humidity']
         description = data['weather'][0]['description']
         wind_speed = data['wind']['speed']
-        city = data['name']
-        country = data['sys']['country']
 
         # Emoji selection based on weather description
         def get_weather_emoji(description):
@@ -304,68 +327,42 @@ async def weather_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         weather_emoji = get_weather_emoji(description)
 
-        # Format the weather message
+        # Format weather message
         weather_message = (
-            f"{weather_emoji} Weather in {city}, {country}:\n"
-            f"🌡️ Temperature: {temp:.1f}°C\n"
-            f"🌡️ Feels like: {feels_like:.1f}°C\n"
-            f"💧 Humidity: {humidity}%\n"
-            f"📝 Conditions: {description.capitalize()}\n"
-            f"💨 Wind Speed: {wind_speed} m/s"
+            f"{weather_emoji} Clima em {city}:\n"
+            f"🌡️ Temperatura: {temp:.1f}°C\n"
+            f"🌡️ Sensação térmica: {feels_like:.1f}°C\n"
+            f"💧 Umidade: {humidity}%\n"
+            f"📝 Condições: {description.capitalize()}\n"
+            f"💨 Velocidade do vento: {wind_speed} m/s"
         )
 
-        # Send the weather message
         await update.message.reply_text(weather_message)
-
+        logger.info(f"Weather for {city} fetched successfully.")
+    
     except requests.exceptions.RequestException as e:
-        logger.error(f"Network error fetching weather: {e}")
-        await update.message.reply_text("❌ Network error. Unable to fetch weather information.")
-    except KeyError as e:
-        logger.error(f"Error parsing weather data: {e}")
-        await update.message.reply_text("❌ Unable to parse weather information.")
+        await update.message.reply_text(f"Erro ao buscar informações de clima para {city}.")
+        logger.error(f"Weather command error: {e}")
     except Exception as e:
-        logger.error(f"Unexpected error fetching weather: {e}")
-        await update.message.reply_text("❌ Unexpected error processing weather data.")
+        await update.message.reply_text("Ocorreu um erro inesperado.")
+        logger.error(f"Unexpected weather command error: {e}")
 
-async def dollar_real_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fetch current USD to BRL exchange rate."""
-    try:
-        # Use CoinGecko API to get exchange rate
-        usd_brl_rate = cg.get_price(ids='usd', vs_currencies='brl')['usd']['brl']
-        
-        # Safely convert to float and format
-        try:
-            rate = float(usd_brl_rate)
-            message = f"💱 Current Exchange Rate:\n1 USD = R$ {rate:.2f}"
-        except (ValueError, TypeError):
-            message = f"💱 Current Exchange Rate:\n1 USD = {usd_brl_rate}"
-        
-        await update.message.reply_text(message)
-    except Exception as e:
-        logger.error(f"Error fetching USD to BRL rate: {e}")
-        await update.message.reply_text("Unable to fetch current exchange rate.")
+def main():
+    application = ApplicationBuilder().token(os.getenv("TELEGRAM_BOT_TOKEN")).build()
 
-def main() -> None:
-    """Start the bot."""
-    # Get the bot token from environment variables
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-
-    # Create the Application and pass it your bot's token.
-    application = Application.builder().token(token).build()
-
-    # on different commands - answer in Telegram
-    application.add_handler(CommandHandler("start", send_startup_message))
-    application.add_handler(CommandHandler("help", help_command))
+    # Handlers
+    application.add_handler(CommandHandler("start", send_welcome_message))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("shutdown", shutdown_command))
+    application.add_handler(CommandHandler("dolar", dolar_command))
     application.add_handler(CommandHandler("weather", weather_command))
-    application.add_handler(CommandHandler("dolar", dollar_real_command))  # Add this line
+    application.add_handler(ChatMemberHandler(new_member_welcome, ChatMemberHandler.CHAT_MEMBER))
+    
+    # Schedule startup tasks using JobQueue
+    application.job_queue.run_once(startup_tasks, when=0)
 
-    # Schedule the welcome message, screenshot, and financial data to be sent at startup using JobQueue
-    application.job_queue.run_once(on_start, when=2)
-
-    # Start polling
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    # Run the bot
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
